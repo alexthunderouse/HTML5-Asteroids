@@ -636,17 +636,18 @@ AlienBullet = function () {
 AlienBullet.prototype = new Bullet();
 
 Asteroid = function () {
+  // Star shape with 5 points (outer and inner vertices alternate)
   this.init("asteroid",
-            [-10,   0,
-              -5,   7,
-              -3,   4,
-               1,  10,
-               5,   4,
-              10,   0,
-               5,  -6,
-               2, -10,
-              -4, -10,
-              -4,  -5]);
+            [  0, -10,  // top point
+              -2,  -3,  // inner top-left
+              -9,  -3,  // outer left point
+              -3,   0,  // inner left
+              -6,   8,  // bottom-left point
+               0,   3,  // inner bottom
+               6,   8,  // bottom-right point
+               3,   0,  // inner right
+               9,  -3,  // outer right point
+               2,  -3]); // inner top-right
 
   this.visible = true;
   this.scale = 6;
