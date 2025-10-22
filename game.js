@@ -381,7 +381,7 @@ Ship = function () {
 
   this.postMove = this.wrapPostMove;
 
-  this.collidesWith = ["asteroid", "bigalien", "alienbullet"];
+  this.collidesWith = ["asteroid", "bigalien", "alienbullet", "powerup"];
 
   this.preMove = function (delta) {
     if (KEY_STATUS.left) {
@@ -409,20 +409,36 @@ Ship = function () {
     if (KEY_STATUS.space) {
       if (this.bulletCounter <= 0) {
         this.bulletCounter = 10;
-        for (var i = 0; i < this.bullets.length; i++) {
+        var rad = ((this.rot-90) * Math.PI)/180;
+        var vectorx = Math.cos(rad);
+        var vectory = Math.sin(rad);
+        
+        // Shoot bullets based on power-up state
+        var bulletsToShoot = Game.powerUps.double_layer.active ? 2 : 1;
+        var bulletsShot = 0;
+        
+        for (var i = 0; i < this.bullets.length && bulletsShot < bulletsToShoot; i++) {
           if (!this.bullets[i].visible) {
             SFX.laser();
             var bullet = this.bullets[i];
-            var rad = ((this.rot-90) * Math.PI)/180;
-            var vectorx = Math.cos(rad);
-            var vectory = Math.sin(rad);
-            // move to the nose of the ship
-            bullet.x = this.x + vectorx * 4;
-            bullet.y = this.y + vectory * 4;
+            
+            // Calculate offset for double layer
+            var offset = 0;
+            if (bulletsToShoot === 2) {
+              offset = (bulletsShot === 0) ? -4 : 4;
+            }
+            
+            // Calculate perpendicular offset
+            var perpX = -vectory * offset;
+            var perpY = vectorx * offset;
+            
+            // Move to the nose of the ship with offset
+            bullet.x = this.x + vectorx * 4 + perpX;
+            bullet.y = this.y + vectory * 4 + perpY;
             bullet.vel.x = 6 * vectorx + this.vel.x;
             bullet.vel.y = 6 * vectory + this.vel.y;
             bullet.visible = true;
-            break;
+            bulletsShot++;
           }
         }
       }
@@ -436,6 +452,10 @@ Ship = function () {
   };
 
   this.collision = function (other) {
+    if (other.name === 'powerup') {
+      // Power-up collection is handled by the power-up's collision method
+      return;
+    }
     SFX.explosion();
     Game.explosionAt(other.x, other.y);
     Game.FSM.state = 'player_died';
@@ -586,7 +606,9 @@ Bullet = function () {
   this.draw = function () {
     if (this.visible) {
       this.context.save();
-      this.context.lineWidth = 2;
+      var bulletSize = Game.powerUps.bullet_size.active ? 4 : 2;
+      this.context.lineWidth = bulletSize;
+      this.context.strokeStyle = Game.powerUps.bullet_size.active ? 'red' : 'white';
       this.context.beginPath();
       this.context.moveTo(this.x-1, this.y-1);
       this.context.lineTo(this.x+1, this.y+1);
@@ -658,6 +680,12 @@ Asteroid = function () {
   this.collision = function (other) {
     SFX.explosion();
     if (other.name == "bullet") Game.score += 120 / this.scale;
+    
+    // Spawn power-up when large asteroid is destroyed
+    if (this.scale >= 6 && other.name == "bullet") {
+      Game.spawnPowerUp(this.x, this.y);
+    }
+    
     this.scale /= 3;
     if (this.scale > 0.5) {
       // break into fragments
@@ -718,6 +746,66 @@ Explosion = function () {
   };
 };
 Explosion.prototype = new Sprite();
+
+PowerUp = function (type) {
+  this.powerUpType = type || 'bullet_size';
+  
+  // Diamond shape for power-up
+  this.init("powerup",
+            [ 0, -8,
+              8,  0,
+              0,  8,
+             -8,  0]);
+
+  this.bridgesH = false;
+  this.bridgesV = false;
+  this.collidesWith = ["ship"];
+  this.postMove = this.wrapPostMove;
+  
+  this.lifeTime = 0;
+  
+  this.draw = function () {
+    if (this.visible) {
+      this.context.save();
+      this.context.lineWidth = 2;
+      this.context.strokeStyle = this.powerUpType === 'bullet_size' ? 'red' : 'cyan';
+      this.context.beginPath();
+      this.context.moveTo(this.points[0], this.points[1]);
+      for (var i = 1; i < this.points.length/2; i++) {
+        var xi = i*2;
+        var yi = xi + 1;
+        this.context.lineTo(this.points[xi], this.points[yi]);
+      }
+      this.context.closePath();
+      this.context.stroke();
+      
+      // Add pulsing effect
+      this.context.globalAlpha = 0.3 + 0.3 * Math.sin(this.lifeTime / 10);
+      this.context.fillStyle = this.powerUpType === 'bullet_size' ? 'red' : 'cyan';
+      this.context.fill();
+      this.context.restore();
+    }
+  };
+  
+  this.preMove = function (delta) {
+    if (this.visible) {
+      this.lifeTime += delta;
+      this.vel.rot = 2; // slow rotation
+    }
+    // Power-ups disappear after 15 seconds
+    if (this.lifeTime > 450) {
+      this.die();
+    }
+  };
+  
+  this.collision = function (other) {
+    if (other.name === 'ship') {
+      Game.activatePowerUp(this.powerUpType);
+      this.die();
+    }
+  };
+};
+PowerUp.prototype = new Sprite();
 
 GridNode = function () {
   this.north = null;
@@ -882,6 +970,12 @@ Game = {
   bigAlien: null,
 
   nextBigAlienTime: null,
+  
+  // Power-up system
+  powerUps: {
+    bullet_size: { active: false, timer: 0, duration: 300 }, // 10 seconds
+    double_layer: { active: false, timer: 0, duration: 300 }
+  },
 
 
   spawnAsteroids: function (count) {
@@ -910,6 +1004,33 @@ Game = {
     splosion.y = y;
     splosion.visible = true;
     Game.sprites.push(splosion);
+  },
+  
+  activatePowerUp: function (type) {
+    this.powerUps[type].active = true;
+    this.powerUps[type].timer = this.powerUps[type].duration;
+  },
+  
+  updatePowerUps: function (delta) {
+    for (var type in this.powerUps) {
+      if (this.powerUps[type].active) {
+        this.powerUps[type].timer -= delta;
+        if (this.powerUps[type].timer <= 0) {
+          this.powerUps[type].active = false;
+        }
+      }
+    }
+  },
+  
+  spawnPowerUp: function (x, y) {
+    // 30% chance to spawn a power-up
+    if (Math.random() < 0.3) {
+      var powerUp = new PowerUp(Math.random() < 0.5 ? 'bullet_size' : 'double_layer');
+      powerUp.x = x;
+      powerUp.y = y;
+      powerUp.visible = true;
+      this.sprites.push(powerUp);
+    }
   },
 
   FSM: {
@@ -1159,10 +1280,29 @@ $(function () {
         i--;
       }
     }
+    
+    // Update power-ups
+    Game.updatePowerUps(delta);
 
     // score
     var score_text = ''+Game.score;
     Text.renderText(score_text, 18, Game.canvasWidth - 14 * score_text.length, 20);
+    
+    // power-up indicators
+    var powerUpY = 40;
+    if (Game.powerUps.bullet_size.active) {
+      context.save();
+      context.fillStyle = 'red';
+      context.fillText('BULLET+', Game.canvasWidth - 80, powerUpY);
+      context.restore();
+      powerUpY += 15;
+    }
+    if (Game.powerUps.double_layer.active) {
+      context.save();
+      context.fillStyle = 'cyan';
+      context.fillText('DOUBLE', Game.canvasWidth - 80, powerUpY);
+      context.restore();
+    }
 
     // extra dudes
     for (i = 0; i < Game.lives; i++) {
